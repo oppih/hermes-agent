@@ -1,10 +1,11 @@
-"""Regression test for #45759.
+"""Regression test for #45759 + model-level exhaustion horizon.
 
 An all-exhausted credential pool holds entries but no *usable* credential.
-``list_authenticated_providers`` must not treat such a provider as
-authenticated -- otherwise an aggregator whose quota is spent gets matched
-during no-provider ``/model`` resolution, wins the model name, and sticks as
-the session provider (the "sticky provider fallback pollution" bug).
+``list_authenticated_providers`` must NOT hide a provider whose pool is
+exhausted — rate limits are per-model for many providers (Google Gemini,
+etc.), and switching to a different model under the same provider should
+work immediately.  See the companion Layer-2 fix in
+``try_activate_fallback`` for the runtime recovery path.
 """
 
 import pytest
@@ -57,14 +58,15 @@ def _strip_provider_env(monkeypatch):
             monkeypatch.delenv(key, raising=False)
 
 
-def test_exhausted_pool_provider_is_not_authenticated(monkeypatch):
-    """The fix: an exhausted pool is NOT authenticated. Fails on main, where
-    the gate accepted any stored pool entry regardless of usability."""
+def test_exhausted_pool_provider_is_authenticated(monkeypatch):
+    """With credentials visible, an exhausted pool is still authenticated.
+    The provider stays visible so the user can switch to a different model
+    under the same provider (rate limits are per-model not per-key)."""
     from hermes_cli.model_switch import get_authenticated_provider_slugs
 
     _patch_opencode_pool(monkeypatch, available=False)
     slugs = get_authenticated_provider_slugs(current_provider="alibaba")
-    assert "opencode-go" not in slugs
+    assert "opencode-go" in slugs
 
 
 def test_pool_provider_with_available_credential_is_authenticated(monkeypatch):

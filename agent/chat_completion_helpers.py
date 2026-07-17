@@ -1480,6 +1480,41 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # (not substring) — see GHSA-76xc-57q6-vm5m.
         if fb_base_url_hint and base_url_host_matches(fb_base_url_hint, "ollama.com") and not fb_api_key_hint:
             fb_api_key_hint = os.getenv("OLLAMA_API_KEY") or None
+        # When falling back to a different model under the *same* provider,
+        # clear credential-pool exhaustion marks.  Rate limits are per-model
+        # for many providers (Google Gemini, etc.) — a 429 on model A does
+        # not mean the same key will 429 on model B.  (See #coral-reef.)
+        primary_provider = (
+            (agent._primary_runtime or {}).get("provider") or ""
+        ).strip().lower()
+        primary_model = (
+            (agent._primary_runtime or {}).get("model") or ""
+        ).strip().lower()
+        from agent.auxiliary_client import _normalize_aux_provider as _aux_norm
+        fb_provider_norm = _aux_norm(fb_provider)
+        if (
+            fb_provider_norm
+            and primary_provider
+            and fb_provider_norm == primary_provider
+            and fb_model.lower().strip() != primary_model
+        ):
+            try:
+                from agent.credential_pool import load_pool
+                pool = load_pool(fb_provider_norm)
+                if pool and pool.has_credentials() and not pool.has_available():
+                    n = pool.reset_statuses()
+                    if n:
+                        logger.info(
+                            "Fallback model change (%s → %s): cleared %d "
+                            "exhausted credential(s) for provider %s",
+                            primary_model or "?",
+                            fb_model,
+                            n,
+                            fb_provider_norm,
+                        )
+            except Exception:
+                pass
+
         fb_client, _resolved_fb_model = resolve_provider_client(
             fb_provider, model=fb_model, raw_codex=True,
             explicit_base_url=fb_base_url_hint,
