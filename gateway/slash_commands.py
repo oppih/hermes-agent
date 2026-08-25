@@ -683,6 +683,26 @@ class GatewaySlashCommandsMixin:
             provider_name = persisted_provider
             base_url = _clean_str(persisted_route.get("billing_base_url"))
             route_resolved = True
+
+        # If fallback is active, the persisted billing_provider may be stale
+        # (it records the provider that was tried, not the one currently serving).
+        # Prefer gateway_runtime which reflects the actual active route.
+        if route_resolved and model_name:
+            try:
+                raw_config = session_row.get("model_config") if isinstance(session_row, dict) else None
+                if raw_config:
+                    cfg = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+                    if isinstance(cfg, dict):
+                        runtime = cfg.get("gateway_runtime")
+                        if isinstance(runtime, dict) and runtime.get("fallback_active"):
+                            rt_provider = _clean_str(runtime.get("provider"))
+                            rt_base = _clean_str(runtime.get("base_url"))
+                            if rt_provider and rt_provider != persisted_provider:
+                                provider_name = rt_provider
+                                if rt_base:
+                                    base_url = rt_base
+            except Exception:
+                pass
         if not route_resolved:
             model_name = _clean_str(session_row.get("model"))
             provider_name = _clean_str(session_row.get("billing_provider"))
